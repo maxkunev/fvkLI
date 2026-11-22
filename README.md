@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/drawable/logo_li.png" width="240" alt="LI (fvkLI) Logo" />
+  <img src="app/src/main/res/drawable/logo_li_no_bg.png" width="240" alt="LI (fvkLI) Logo" />
 </p>
 
 <h1 align="center">LI (fvkLI) — Offline Android Music Player</h1>
