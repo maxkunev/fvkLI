@@ -1,15 +1,26 @@
 package com.example.fvkli.ui.theme.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -34,38 +45,118 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.fvkli.R
 import com.example.fvkli.models.Track
 import com.example.fvkli.player.AudioPlayer
 import kotlinx.coroutines.delay
-import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 fun PlayerScreen(
-    track: Track,
+    visible: Boolean,
+    track: Track?,
+    previousTrack: Track? = null,
+    nextTrack: Track? = null,
     isPlaying: Boolean,
     onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onClose: () -> Unit
 ) {
-    var positionMs by remember(track.id) { mutableLongStateOf(AudioPlayer.getCurrentPosition()) }
-    var durationMs by remember(track.id) { mutableLongStateOf(AudioPlayer.getDuration()) }
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val expandProgress = remember { Animatable(0f) }
+
+    var displayedTrack by remember { mutableStateOf(track) }
+    if (track != null) {
+        displayedTrack = track
+    }
+
+    LaunchedEffect(visible) {
+        if (visible) {
+            expandProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(dampingRatio = 0.86f, stiffness = 380f)
+            )
+        } else {
+            expandProgress.snapTo(0f)
+            if (track == null) displayedTrack = null
+        }
+    }
+
+    val activeTrack = displayedTrack
+    if ((!visible && expandProgress.value == 0f) || activeTrack == null) return
+
+    fun triggerClose() {
+        scope.launch {
+            expandProgress.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing)
+            )
+            onClose()
+        }
+    }
+
+    if (visible) {
+        BackHandler(onBack = ::triggerClose)
+    }
+
+    val screenHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    val miniPlayerHeightPx = with(density) { 78.dp.toPx() }
+    val maxTravelPx = (screenHeightPx - miniPlayerHeightPx).coerceAtLeast(1f)
+
+    val p = expandProgress.value.coerceIn(0f, 1f)
+    val sheetCornerRadius = 20.dp * (1f - p)
+    val sheetAlpha = (p / 0.35f).coerceIn(0f, 1f)
+    val innerScale = 0.92f + 0.08f * p
+
+    val offsetX = remember { Animatable(0f) }
+    val swipeThresholdPx = with(density) { 96.dp.toPx() }
+
+    val bgEntryAlpha = remember { Animatable(0f) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            bgEntryAlpha.snapTo(0f)
+            bgEntryAlpha.animateTo(1f, tween(durationMillis = 900))
+        }
+    }
+
+    var settledTrackId by remember { mutableStateOf(activeTrack.id) }
+    val activeOffsetX = if (activeTrack.id != settledTrackId) 0f else offsetX.value
+
+    LaunchedEffect(activeTrack.id) {
+        offsetX.snapTo(0f)
+        settledTrackId = activeTrack.id
+    }
+
+    var positionMs by remember(activeTrack.id) { mutableLongStateOf(AudioPlayer.getCurrentPosition()) }
+    var durationMs by remember(activeTrack.id) { mutableLongStateOf(AudioPlayer.getDuration()) }
     var isDragging by remember { mutableStateOf(false) }
     var dragPosition by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(track.id, isPlaying) {
+    LaunchedEffect(activeTrack.id, isPlaying) {
         while (true) {
             if (!isDragging) {
                 positionMs = AudioPlayer.getCurrentPosition()
@@ -82,173 +173,359 @@ fun PlayerScreen(
         positionMs.toFloat().coerceIn(0f, safeDuration)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(Color(0xFF2A2A2A), Color(0xFF121212))
-                )
-            )
-            .pointerInput(Unit) {}
-            .systemBarsPadding()
-            .padding(horizontal = 24.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onClose) {
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = "Close",
-                    tint = Color.White,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-            Text(
-                text = "Now Playing",
-                color = Color(0xFFB3B3B3),
-                fontSize = 14.sp,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Spacer(modifier = Modifier.weight(0.5f))
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Затемнение позади сворачиваемого плеера
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f * p))
+        )
 
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF1E1E1E)),
-            contentAlignment = Alignment.Center
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = (1f - p) * maxTravelPx
+                    alpha = sheetAlpha
+                }
+                .clip(RoundedCornerShape(topStart = sheetCornerRadius, topEnd = sheetCornerRadius))
+                .background(Color(0xFF121212))
+                .pointerInput(Unit) {}
+                .pointerInput(maxTravelPx) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (expandProgress.value < 0.78f) {
+                                triggerClose()
+                            } else {
+                                scope.launch {
+                                    expandProgress.animateTo(
+                                        targetValue = 1f,
+                                        animationSpec = spring(dampingRatio = 0.82f, stiffness = 400f)
+                                    )
+                                }
+                            }
+                        },
+                        onDragCancel = {
+                            scope.launch { expandProgress.animateTo(1f, spring()) }
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val currentDrag = (1f - expandProgress.value) * maxTravelPx
+                            val nextDrag = (currentDrag + dragAmount).coerceIn(0f, maxTravelPx)
+                            scope.launch {
+                                expandProgress.snapTo(1f - (nextDrag / maxTravelPx))
+                            }
+                        }
+                    )
+                }
         ) {
-            if (track.coverFile != null) {
-                AsyncImage(
-                    model = track.coverFile,
-                    contentDescription = "Track Cover",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.MusicNote,
-                    contentDescription = null,
-                    tint = Color.Gray,
-                    modifier = Modifier.size(96.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = track.title,
-                color = Color.White,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = track.artist,
-                color = Color(0xFFB3B3B3),
-                fontSize = 16.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Slider(
-            value = sliderValue,
-            onValueChange = {
-                isDragging = true
-                dragPosition = it
-            },
-            onValueChangeFinished = {
-                AudioPlayer.seekTo(dragPosition.toLong())
-                positionMs = dragPosition.toLong()
-                isDragging = false
-            },
-            valueRange = 0f..safeDuration,
-            modifier = Modifier.fillMaxWidth(),
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color(0xFF1DB954),
-                inactiveTrackColor = Color(0xFF4D4D4D)
-            )
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = formatTime(sliderValue.toLong()),
-                color = Color(0xFFB3B3B3),
-                fontSize = 12.sp
-            )
-            Text(
-                text = formatTime(durationMs),
-                color = Color(0xFFB3B3B3),
-                fontSize = 12.sp
-            )
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = onPrevious,
-                modifier = Modifier.size(56.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.SkipPrevious,
-                    contentDescription = "Previous",
-                    tint = Color.White,
-                    modifier = Modifier.size(40.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onPlayPause,
+            Crossfade(
+                targetState = activeTrack.coverFile,
+                animationSpec = tween(durationMillis = 800),
+                label = "bgCrossfade",
                 modifier = Modifier
-                    .size(68.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-            ) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = "Play/Pause",
-                    tint = Color.Black,
-                    modifier = Modifier.size(38.dp)
-                )
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = bgEntryAlpha.value }
+            ) { cover ->
+                if (cover != null) {
+                    AsyncImage(
+                        model = cover,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = 1.35f
+                                scaleY = 1.35f
+                            }
+                            .blur(55.dp)
+                    )
+                }
             }
 
-            IconButton(
-                onClick = onNext,
-                modifier = Modifier.size(56.dp)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF1E1E1E).copy(alpha = 0.62f),
+                                Color(0xFF121212).copy(alpha = 0.86f),
+                                Color(0xFF0C0C0C)
+                            )
+                        )
+                    )
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = innerScale
+                        scaleY = innerScale
+                    }
+                    .systemBarsPadding()
+                    .padding(vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.SkipNext,
-                    contentDescription = "Next",
-                    tint = Color.White,
-                    modifier = Modifier.size(40.dp)
-                )
+                // Выровнено по верхнему краю — логотип стоит на той же высоте, что и в MainActivity
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    IconButton(
+                        onClick = ::triggerClose,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .offset(y = (-6).dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = "Close",
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.logo_li_no_bg),
+                            contentDescription = "LI Logo",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.height(36.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.size(48.dp))
+                }
+
+                Spacer(modifier = Modifier.weight(0.55f))
+
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val cardSize = maxWidth - 56.dp
+                    val gap = 16.dp
+                    val stepPx = with(density) { (cardSize + gap).toPx() }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .pointerInput(activeTrack.id, nextTrack != null, previousTrack != null) {
+                                detectHorizontalDragGestures(
+                                    onDragEnd = {
+                                        scope.launch {
+                                            when {
+                                                offsetX.value < -swipeThresholdPx && nextTrack != null -> {
+                                                    offsetX.animateTo(-stepPx, tween(200))
+                                                    onNext()
+                                                    delay(400L)
+                                                    if (offsetX.value != 0f) offsetX.animateTo(0f, spring())
+                                                }
+                                                offsetX.value > swipeThresholdPx && previousTrack != null -> {
+                                                    offsetX.animateTo(stepPx, tween(200))
+                                                    onPrevious()
+                                                    delay(400L)
+                                                    if (offsetX.value != 0f) offsetX.animateTo(0f, spring())
+                                                }
+                                                else -> {
+                                                    offsetX.animateTo(0f, spring())
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        scope.launch { offsetX.animateTo(0f, spring()) }
+                                    },
+                                    onHorizontalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        val canDrag = (dragAmount < 0 && nextTrack != null) ||
+                                                (dragAmount > 0 && previousTrack != null)
+                                        val factor = if (canDrag) 1f else 0.25f
+                                        scope.launch {
+                                            offsetX.snapTo(offsetX.value + dragAmount * factor)
+                                        }
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (previousTrack != null && activeOffsetX > 0f) {
+                            CoverCard(
+                                track = previousTrack,
+                                modifier = Modifier
+                                    .size(cardSize)
+                                    .offset { IntOffset((-stepPx + activeOffsetX).roundToInt(), 0) }
+                            )
+                        }
+
+                        CoverCard(
+                            track = activeTrack,
+                            modifier = Modifier
+                                .size(cardSize)
+                                .offset { IntOffset(activeOffsetX.roundToInt(), 0) }
+                        )
+
+                        if (nextTrack != null && activeOffsetX < 0f) {
+                            CoverCard(
+                                track = nextTrack,
+                                modifier = Modifier
+                                    .size(cardSize)
+                                    .offset { IntOffset((stepPx + activeOffsetX).roundToInt(), 0) }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(34.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp)
+                ) {
+                    Text(
+                        text = activeTrack.title,
+                        color = Color.White,
+                        fontSize = 23.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = activeTrack.artist,
+                        color = Color.White.copy(alpha = 0.65f),
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(modifier = Modifier.height(22.dp))
+
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = {
+                            isDragging = true
+                            dragPosition = it
+                        },
+                        onValueChangeFinished = {
+                            AudioPlayer.seekTo(dragPosition.toLong())
+                            positionMs = dragPosition.toLong()
+                            isDragging = false
+                        },
+                        valueRange = 0f..safeDuration,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = Color(0xFF1DB954),
+                            inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                        )
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = formatTime(sliderValue.toLong()),
+                            color = Color.White.copy(alpha = 0.55f),
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = formatTime(durationMs),
+                            color = Color.White.copy(alpha = 0.55f),
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(22.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = onPrevious,
+                            modifier = Modifier.size(56.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipPrevious,
+                                contentDescription = "Previous",
+                                tint = Color.White,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onPlayPause,
+                            modifier = Modifier
+                                .size(70.dp)
+                                .shadow(12.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(Color.White)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = "Play/Pause",
+                                tint = Color.Black,
+                                modifier = Modifier.size(38.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onNext,
+                            modifier = Modifier.size(56.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipNext,
+                                contentDescription = "Next",
+                                tint = Color.White,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.weight(1f))
+@Composable
+private fun CoverCard(
+    track: Track,
+    modifier: Modifier = Modifier
+) {
+    val cardShape = RoundedCornerShape(20.dp)
+    Box(
+        modifier = modifier
+            .shadow(elevation = 20.dp, shape = cardShape)
+            .clip(cardShape)
+            .background(Color(0xFF1E1E1E))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), cardShape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (track.coverFile != null) {
+            AsyncImage(
+                model = track.coverFile,
+                contentDescription = "Track Cover",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.MusicNote,
+                contentDescription = null,
+                tint = Color.Gray,
+                modifier = Modifier.size(96.dp)
+            )
+        }
     }
 }
 

@@ -13,6 +13,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.example.fvkli.models.Track
+import androidx.media3.common.C
 
 object AudioPlayer {
     private var controller: MediaController? = null
@@ -53,9 +54,7 @@ object AudioPlayer {
             .setArtist(artist)
 
         coverFile?.let { file ->
-            runCatching {
-                metaBuilder.setArtworkData(file.readBytes(), MediaMetadata.PICTURE_TYPE_FRONT_COVER)
-            }
+            metaBuilder.setArtworkUri(Uri.fromFile(file))
         }
 
         return MediaItem.Builder()
@@ -101,6 +100,7 @@ object AudioPlayer {
     fun seekTo(positionMs: Long) {
         controller?.seekTo(positionMs.coerceAtLeast(0L))
     }
+
     fun updateTrackInQueue(track: Track) {
         val ctrl = controller ?: return
         for (i in 0 until ctrl.mediaItemCount) {
@@ -123,5 +123,29 @@ object AudioPlayer {
             currentTrackId = null
             isPlaying = false
         }
+    }
+
+    fun stopAndClear() {
+        controller?.stop()
+        controller?.clearMediaItems()
+        isPlaying = false
+        currentTrackId = null
+    }
+    fun getNextTrackId(): String? {
+        val ctrl = controller ?: return null
+        if (ctrl.mediaItemCount <= 1) return null
+        val idx = ctrl.nextMediaItemIndex
+        return if (idx != C.INDEX_UNSET && idx in 0 until ctrl.mediaItemCount) {
+            ctrl.getMediaItemAt(idx).mediaId
+        } else null
+    }
+
+    fun getPreviousTrackId(): String? {
+        val ctrl = controller ?: return null
+        if (ctrl.mediaItemCount <= 1) return null
+        val idx = ctrl.previousMediaItemIndex
+        return if (idx != C.INDEX_UNSET && idx in 0 until ctrl.mediaItemCount) {
+            ctrl.getMediaItemAt(idx).mediaId
+        } else null
     }
 }
