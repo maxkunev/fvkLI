@@ -21,41 +21,69 @@
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="app/docs/library.png" width="22%" alt="Library View" />
+  <img src="app/docs/player.png" width="22%" alt="Full-Screen Player" />
+  <img src="app/docs/share_menu.png" width="22%" alt="Context Menu & Sharing" />
+  <img src="app/docs/settings.png" width="22%" alt="Settings & Storage" />
+</p>
+
 ## Why LI?
 
-Most music apps require a constant internet connection, paid subscriptions, or third-party cloud backends to download tracks. **LI** runs completely on-device using `yt-dlp`, keeping your audio library offline, private, and free of lossy re-encoding.
+Most music apps lock your library behind constant internet connections, paid subscriptions, or third-party cloud backends. **LI** runs 100% locally on your Android device using `yt-dlp` and `Media3`, keeping your music collection offline, private, and free of lossy re-encoding.
+
+- **Zero Telemetry & No Backend:** Everything happens directly on your phone. No accounts, no tracking, no external APIs.
+- **Native Audio Streams:** Saves original audio formats (`.opus`, `.m4a`, `.mp3`, `.webm`) without unnecessary transcoding.
+- **System-Native Workflow:** Share links straight from TikTok or YouTube into LI, and export clean `Artist - Title` audio files back to any messenger.
 
 ## Features
 
-- **Direct YouTube & TikTok Audio Extraction:** Paste a link via the floating `+` button to download tracks directly on your phone using `youtubedl-android` (`yt-dlp`).
-- **Original Audio Quality (No Re-encoding):** Saves native audio streams (`.opus`, `.m4a`, `.mp3`, `.webm`) without unnecessary FFmpeg transcoding.
-- **Background Playback (Jetpack Media3):** Persistent foreground playback service powered by ExoPlayer with lock-screen controls, notification widget, headset button support, and continuous loop playback.
-- **Full-Screen & Mini Player:** Expandable `PlayerScreen` with cover art, interactive seek slider, and timers, paired with a compact bottom `MiniPlayer`.
-- **Smart Local Library:** Automatically fetches track thumbnails, splits raw video titles into Artist & Title, highlights the active track with play/pause indicators, and supports manual renaming and deletion.
+### Audio Extraction & Sharing
+- **One-Tap System Share Import:** Appears in Android's native **Share** sheet across YouTube, TikTok, SoundCloud, and browsers—automatically strips extra caption text and opens the download dialog ready to go.
+- **Direct URL Download:** Paste any supported media link via the floating `+` button powered by `youtubedl-android` (`yt-dlp`).
+- **Outgoing File Sharing:** Export single tracks via the long-press menu or batch-share multiple tracks in `Select` mode. Files are automatically formatted as `Artist - Title` via `FileProvider`.
+
+### Playback & Gesture-Driven UI
+- **Persistent Background Playback:** Built on Jetpack Media3 (`ExoPlayer` + `MediaSessionService`) with lock-screen controls, media notifications, headset button support, and continuous loop playback.
+- **Full-Screen Player:** Expandable `PlayerScreen` featuring a swipeable cover carousel, interactive seek slider, quick metadata editing/deletion menu, and spring transitions.
+- **Collapsible MiniPlayer:** Always-accessible bottom bar with track info, transport controls, and a custom cover-aligned close tab.
+
+### Library & Storage Management
+- **Flexible Browsing:** Switch between **List** and **Grid** layouts, sort your library, and use multi-select mode for batch sharing or deletion.
+- **Smart Metadata Handling:** Automatically fetches cover art, splits raw video titles into `Artist` and `Title`, and lets you edit tags or replace artwork anytime.
+- **Built-in Settings & Cache Control:** Track total library disk usage, clear temporary share caches in one tap, inspect open-source licenses, and copy device diagnostics for bug reports.
 
 ## Installation
 
-1. Go to the [**Latest Release**](https://github.com/maxkunev/fvkLI/releases/latest) page.
-2. Download `LI-v0.1.0.apk` from the **Assets** section.
-3. Open the APK on your Android device and allow installation from unknown sources if prompted.
+1. Open the [**Latest Release**](https://github.com/maxkunev/fvkLI/releases/latest) page.
+2. Download **`LI-v0.2.1.apk`** (or the latest APK) from the **Assets** section.
+3. Open the downloaded file on your Android device (**Android 7.0 / API 24+**) and allow installation from unknown sources if prompted.
 
-## Tech Stack
+## Tech Stack & Architecture
 
-- **Language:** Kotlin
-- **UI:** Jetpack Compose (Material 3)
-- **Audio Engine:** Jetpack Media3 (ExoPlayer & MediaSessionService)
-- **Downloader:** `youtubedl-android` (`yt-dlp`)
-- **Image Loading:** Coil
-- **Metadata Storage:** Lightweight local `.json` files alongside audio tracks
+| Layer | Technology | Purpose |
+| :--- | :--- | :--- |
+| **Language** | Kotlin | Core application logic and coroutines |
+| **UI Framework** | Jetpack Compose (Material 3) | Declarative UI, custom shapes, and gesture animations |
+| **Audio Engine** | Jetpack Media3 (`ExoPlayer`) | Background `MediaSessionService` and audio focus handling |
+| **Media Extractor** | `youtubedl-android` (`yt-dlp`) | On-device stream extraction from YouTube, TikTok, etc. |
+| **Image Loading** | Coil | Asynchronous cover art loading and memory caching |
+| **Storage & Sharing** | Local JSON + `FileProvider` | Lightweight metadata persistence and secure URI file sharing |
 
 ## Roadmap
 
 - [x] Offline YouTube & TikTok audio downloading without re-encoding
-- [x] Jetpack Media3 background service & loop queue
-- [x] Automatic covers, MiniPlayer & full-screen PlayerScreen with seek bar
-- [x] Manual track editing & deletion
-- [ ] Direct downloading via Android **Share** menu from YouTube / TikTok (`v0.2.0`)
-- [ ] Custom playlists & library search
+- [x] Jetpack Media3 background playback service & loop queue
+- [x] Automatic cover art, MiniPlayer & swipeable full-screen PlayerScreen
+- [x] Manual track metadata/cover editing, Grid/List views, sorting & batch selection
+- [x] Direct downloading via Android **Share** menu from YouTube / TikTok
+- [x] Outgoing single & batch audio file sharing (`Artist - Title`)
+- [x] Settings screen with storage stats, cache cleaner & legal notices
+- [ ] Custom playlists & queue reordering
+- [ ] Instant library search & filtering
+- [ ] Playback speed control & audio equalizer
 - [ ] Local on-device AI for automatic metadata cleanup & lyrics/subtitles
 
 ## Building from Source
@@ -64,11 +92,18 @@ Most music apps require a constant internet connection, paid subscriptions, or t
    ```bash
    git clone [https://github.com/maxkunev/fvkLI.git](https://github.com/maxkunev/fvkLI.git)
    ```
-2. Open the project in **Android Studio**.
-3. Let Gradle sync dependencies and run the `app` configuration on an emulator or physical Android device.
+2. Open the project in **Android Studio** (Ladybug or newer recommended).
+3. Wait for Gradle to sync dependencies and download the native `youtubedl-android` libraries.
+4. Select the `app` run configuration and deploy to a physical Android device or emulator (`minSdk 24`).
+
+## Disclaimer
+
+**LI (fvkLI)** is an independent open-source project intended solely for personal, non-commercial use. Users are responsible for complying with local copyright laws and the Terms of Service of any third-party platforms from which they access content.
 
 ---
 
-<sub>
-<strong>Tags & Keywords:</strong> android music player, offline music player android, open source spotify alternative, youtube audio downloader android, tiktok audio downloader, yt-dlp android app, youtubedl-android, jetpack media3 exoplayer, jetpack compose music player, kotlin audio player, local mp3 opus player, free ad-free music app android.
-</sub>
+<details>
+<summary>Keywords & Topics</summary>
+
+`android-music-player` · `offline-music-player` · `youtube-audio-downloader` · `tiktok-audio-downloader` · `yt-dlp-android` · `youtubedl-android` · `jetpack-media3` · `exoplayer` · `jetpack-compose` · `kotlin-android` · `open-source-music-player` · `opus-player`
+</details>
