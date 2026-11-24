@@ -1,16 +1,21 @@
 package com.example.fvkli.ui.theme.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,23 +29,30 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -72,6 +84,8 @@ import com.example.fvkli.player.AudioPlayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.ui.platform.LocalContext
+import coil.request.ImageRequest
 
 @Composable
 fun PlayerScreen(
@@ -83,11 +97,14 @@ fun PlayerScreen(
     onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
+    onEdit: (Track) -> Unit = {},
+    onDelete: (Track) -> Unit = {},
     onClose: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val expandProgress = remember { Animatable(0f) }
+    var showMoreMenu by remember { mutableStateOf(false) }
 
     var displayedTrack by remember { mutableStateOf(track) }
     if (track != null) {
@@ -95,6 +112,7 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(visible) {
+        showMoreMenu = false
         if (visible) {
             expandProgress.animateTo(
                 targetValue = 1f,
@@ -110,6 +128,7 @@ fun PlayerScreen(
     if ((!visible && expandProgress.value == 0f) || activeTrack == null) return
 
     fun triggerClose() {
+        showMoreMenu = false
         scope.launch {
             expandProgress.animateTo(
                 targetValue = 0f,
@@ -119,7 +138,7 @@ fun PlayerScreen(
         }
     }
 
-    if (visible) {
+    if (visible && !showMoreMenu) {
         BackHandler(onBack = ::triggerClose)
     }
 
@@ -147,6 +166,7 @@ fun PlayerScreen(
     val activeOffsetX = if (activeTrack.id != settledTrackId) 0f else offsetX.value
 
     LaunchedEffect(activeTrack.id) {
+        showMoreMenu = false
         offsetX.snapTo(0f)
         settledTrackId = activeTrack.id
     }
@@ -174,7 +194,6 @@ fun PlayerScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Затемнение позади сворачиваемого плеера
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -268,7 +287,6 @@ fun PlayerScreen(
                     .padding(vertical = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Выровнено по верхнему краю — логотип стоит на той же высоте, что и в MainActivity
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -301,14 +319,26 @@ fun PlayerScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.size(48.dp))
+                    IconButton(
+                        onClick = { showMoreMenu = true },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .offset(y = (-6).dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = "Track options",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.weight(0.55f))
 
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     val cardSize = maxWidth - 56.dp
-                    val gap = 16.dp
+                    val gap = 34.dp
                     val stepPx = with(density) { (cardSize + gap).toPx() }
 
                     Box(
@@ -353,13 +383,15 @@ fun PlayerScreen(
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        if (previousTrack != null && activeOffsetX > 0f) {
-                            CoverCard(
-                                track = previousTrack,
-                                modifier = Modifier
-                                    .size(cardSize)
-                                    .offset { IntOffset((-stepPx + activeOffsetX).roundToInt(), 0) }
-                            )
+                        if (previousTrack != null) {
+                            key("prev_${previousTrack.id}") {
+                                CoverCard(
+                                    track = previousTrack,
+                                    modifier = Modifier
+                                        .size(cardSize)
+                                        .offset { IntOffset((-stepPx + activeOffsetX).roundToInt(), 0) }
+                                )
+                            }
                         }
 
                         CoverCard(
@@ -369,13 +401,15 @@ fun PlayerScreen(
                                 .offset { IntOffset(activeOffsetX.roundToInt(), 0) }
                         )
 
-                        if (nextTrack != null && activeOffsetX < 0f) {
-                            CoverCard(
-                                track = nextTrack,
-                                modifier = Modifier
-                                    .size(cardSize)
-                                    .offset { IntOffset((stepPx + activeOffsetX).roundToInt(), 0) }
-                            )
+                        if (nextTrack != null) {
+                            key("next_${nextTrack.id}") {
+                                CoverCard(
+                                    track = nextTrack,
+                                    modifier = Modifier
+                                        .size(cardSize)
+                                        .offset { IntOffset((stepPx + activeOffsetX).roundToInt(), 0) }
+                                )
+                            }
                         }
                     }
                 }
@@ -493,6 +527,77 @@ fun PlayerScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
             }
+
+            AnimatedVisibility(
+                visible = showMoreMenu,
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(150))
+            ) {
+                BackHandler { showMoreMenu = false }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { showMoreMenu = false }
+                        )
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFF252525),
+                        shadowElevation = 12.dp,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .systemBarsPadding()
+                            .padding(top = 52.dp, end = 16.dp)
+                            .width(150.dp)
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showMoreMenu = false
+                                        onEdit(activeTrack)
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Edit", color = Color.White, fontSize = 15.sp)
+                                Icon(
+                                    imageVector = Icons.Filled.Edit,
+                                    contentDescription = "Edit",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showMoreMenu = false
+                                        onDelete(activeTrack)
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Delete", color = Color(0xFFFF5252), fontSize = 15.sp)
+                                Icon(
+                                    imageVector = Icons.Filled.Delete,
+                                    contentDescription = "Delete",
+                                    tint = Color(0xFFFF5252),
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -502,7 +607,15 @@ private fun CoverCard(
     track: Track,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val cardShape = RoundedCornerShape(20.dp)
+    val imageRequest = remember(track.coverFile) {
+        ImageRequest.Builder(context)
+            .data(track.coverFile)
+            .crossfade(false)
+            .build()
+    }
+
     Box(
         modifier = modifier
             .shadow(elevation = 20.dp, shape = cardShape)
@@ -513,7 +626,7 @@ private fun CoverCard(
     ) {
         if (track.coverFile != null) {
             AsyncImage(
-                model = track.coverFile,
+                model = imageRequest,
                 contentDescription = "Track Cover",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()

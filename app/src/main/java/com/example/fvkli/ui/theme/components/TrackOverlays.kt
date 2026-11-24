@@ -65,6 +65,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.CheckCircleOutline
+import androidx.compose.material.icons.automirrored.rounded.Shortcut
 @Composable
 fun TrackContextMenuOverlay(
     track: Track?,
@@ -73,6 +75,8 @@ fun TrackContextMenuOverlay(
     isCurrent: Boolean,
     isPlaying: Boolean,
     onDismiss: () -> Unit,
+    onSelect: (Track) -> Unit = {},
+    onShare: (Track) -> Unit = {},
     onEdit: (Track) -> Unit,
     onDelete: (Track) -> Unit
 ) {
@@ -99,7 +103,7 @@ fun TrackContextMenuOverlay(
             } else {
                 config.screenWidthDp.dp - 16.dp
             }
-            val menuWidthDp = 160.dp
+            val menuWidthDp = 110.dp
             val menuWidthPx = with(density) { menuWidthDp.toPx() }
             val isLeftColumn = isGrid && (anchor.x + anchor.widthPx / 2f) < (screenWidthPx / 2f)
             val menuOffsetX = if (isLeftColumn) {
@@ -155,6 +159,16 @@ fun TrackContextMenuOverlay(
                             .width(menuWidthDp)
                     ) {
                         Column {
+                            ContextMenuRow("Select", Icons.Rounded.CheckCircleOutline) {
+                                onDismiss()
+                                onSelect(selectedTrack)
+                            }
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                            ContextMenuRow("Share", Icons.AutoMirrored.Rounded.Shortcut) {
+                                onDismiss()
+                                onShare(selectedTrack)
+                            }
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
                             ContextMenuRow("Edit", Icons.Filled.Edit) {
                                 onDismiss()
                                 onEdit(selectedTrack)
@@ -194,6 +208,26 @@ private fun ContextMenuRow(
         } else {
             Text(text, color = color, fontSize = 15.sp)
             Icon(icon, contentDescription = text, tint = color, modifier = Modifier.size(19.dp))
+        }
+    }
+}
+
+@Composable
+fun DeleteSelectedTracksDialog(
+    count: Int,
+    onDismiss: () -> Unit,
+    onConfirmDelete: () -> Unit
+) {
+    if (count > 0) {
+        val label = if (count == 1) "1 selected track" else "$count selected tracks"
+        DarkDialog(
+            onDismissRequest = onDismiss,
+            title = "Delete tracks?",
+            confirmText = "Delete",
+            confirmColor = Color(0xFFFF5252),
+            onConfirm = onConfirmDelete
+        ) {
+            Text("Delete $label from your device?")
         }
     }
 }
@@ -243,6 +277,7 @@ fun EditTrackDialog(
         }
     }
 }
+
 
 @Composable
 fun DeleteTrackDialog(

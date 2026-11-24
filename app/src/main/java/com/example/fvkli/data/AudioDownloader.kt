@@ -17,15 +17,35 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
-import java.util.UUID
-import kotlinx.coroutines.NonCancellable
 import java.util.Collections
+import java.util.UUID
+import android.app.Activity
+import android.content.ClipData
+import android.content.Intent
+import androidx.core.content.FileProvider
+
+data class DownloadState(
+    val isLoading: Boolean = false,
+    val statusText: String = "",
+    val progress: Float? = null,
+    val currentIndex: Int = 0,
+    val downloadedCount: Int = 0,
+    val totalCount: Int = 0,
+    val activeUrl: String = "",
+    val lastRolledBackIds: List<String> = emptyList(),
+    val libraryUpdateTick: Int = 0
+)
 
 object AudioDownloader {
     private val audioExtensions = setOf("m4a", "mp3", "opus", "webm", "ogg", "aac", "wav", "flac", "mp4", "mkv")
@@ -37,10 +57,23 @@ object AudioDownloader {
     @Volatile private var currentProcessId: String? = null
     @Volatile private var isCancelled = false
 
+    private val _downloadState = MutableStateFlow(DownloadState())
+    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+
     private data class PlaylistEntry(
         val url: String,
         val title: String
     )
+
+    fun clearStatus() {
+        if (!_downloadState.value.isLoading) {
+            _downloadState.update { it.copy(statusText = "", progress = null) }
+        }
+    }
+
+    fun consumeRolledBackIds() {
+        _downloadState.update { it.copy(lastRolledBackIds = emptyList()) }
+    }
 
     fun cancelDownload(context: Context) {
         isCancelled = true
@@ -128,6 +161,83 @@ object AudioDownloader {
         }
     }
 
+    fun shareTracks(context: Context, tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+
+        val shareDir = File(context.cacheDir, "shared_tracks").apply {
+            if (exists()) listFiles()?.forEach { it.delete() }
+            mkdirs()
+        }
+
+        val usedNames = mutableSetOf<String>()
+        val uris = ArrayList<Uri>()
+
+        for (track in tracks) {
+            if (!track.file.exists()) continue
+
+            val ext = track.file.extension.lowercase().ifBlank { "m4a" }
+            val rawName = if (track.artist.isNotBlank() && track.artist != "Unknown") {
+                "${track.artist} - ${track.title}"
+            } else {
+                track.title
+            }
+
+            val baseName = rawName
+                .replace(Regex("""[\\/:*?"<>|]"""), "_")
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+                .ifBlank { track.id }
+
+            var candidate = baseName
+            var counter = 2
+            while (!usedNames.add(candidate.lowercase())) {
+                candidate = "$baseName ($counter)"
+                counter++
+            }
+
+            val tempFile = File(shareDir, "$candidate.$ext")
+            runCatching {
+                track.file.copyTo(tempFile, overwrite = true)
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    tempFile
+                )
+                uris.add(uri)
+            }
+        }
+
+        if (uris.isEmpty()) return
+
+        val clipData = ClipData.newUri(context.contentResolver, "Audio", uris.first()).apply {
+            for (i in 1 until uris.size) {
+                addItem(ClipData.Item(uris[i]))
+            }
+        }
+
+        val sendIntent = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).apply {
+                type = "audio/*"
+                putExtra(Intent.EXTRA_STREAM, uris.first())
+            }
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = "audio/*"
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            }
+        }.apply {
+            this.clipData = clipData
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        val chooserTitle = if (uris.size == 1) "Share track" else "Share ${uris.size} tracks"
+        val chooser = Intent.createChooser(sendIntent, chooserTitle).apply {
+            if (context !is Activity) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+        context.startActivity(chooser)
+    }
     fun getSavedTracks(context: Context): List<Track> {
         val dir = getTracksDir(context)
         val allFiles = dir.listFiles() ?: return emptyList()
@@ -156,30 +266,43 @@ object AudioDownloader {
 
     suspend fun downloadAudio(
         context: Context,
-        url: String,
-        onStatus: (String) -> Unit,
-        onProgress: (Float) -> Unit,
-        onTrackDownloaded: (File) -> Unit = {},
-        onQueueProgress: (downloaded: Int, total: Int) -> Unit = { _, _ -> },
-        onRollback: (List<String>) -> Unit = {}
+        url: String
     ): Result<String> = withContext(Dispatchers.IO) {
         isCancelled = false
         val cleanUrl = url.trim()
         val sessionTrackIds = Collections.synchronizedList(mutableListOf<String>())
 
+        _downloadState.update {
+            it.copy(
+                isLoading = true,
+                statusText = "Fetching info...",
+                progress = null,
+                downloadedCount = 0,
+                totalCount = 0,
+                activeUrl = cleanUrl,
+                lastRolledBackIds = emptyList()
+            )
+        }
+
         try {
-            ensureInitialized(context, onStatus)
+            ensureInitialized(context) { msg ->
+                _downloadState.update { it.copy(statusText = msg) }
+            }
             if (isCancelled) throw CancellationException("Cancelled")
             currentCoroutineContext().ensureActive()
 
-            withContext(Dispatchers.Main) { onStatus("Fetching info...") }
+            _downloadState.update { it.copy(statusText = "Fetching info...") }
             val entries = extractPlaylistEntries(cleanUrl)
 
             if (isCancelled) throw CancellationException("Cancelled")
             currentCoroutineContext().ensureActive()
 
             if (entries.isEmpty()) {
-                return@withContext Result.failure(Exception("No tracks found"))
+                val msg = "No tracks found"
+                _downloadState.update {
+                    it.copy(isLoading = false, statusText = "Error: $msg", progress = null, activeUrl = "")
+                }
+                return@withContext Result.failure(Exception(msg))
             }
 
             val isPlaylist = entries.size > 1
@@ -187,8 +310,8 @@ object AudioDownloader {
             var skippedCount = 0
             var lastSavedFile: File? = null
 
-            withContext(Dispatchers.Main) {
-                onQueueProgress(0, entries.size)
+            _downloadState.update {
+                it.copy(downloadedCount = 0, totalCount = entries.size)
             }
 
             for ((index, entry) in entries.withIndex()) {
@@ -201,9 +324,12 @@ object AudioDownloader {
                     "Downloading..."
                 }
 
-                withContext(Dispatchers.Main) {
-                    onProgress(0f)
-                    onStatus(statusPrefix)
+                _downloadState.update {
+                    it.copy(
+                        currentIndex = index + 1,
+                        progress = 0f,
+                        statusText = statusPrefix
+                    )
                 }
 
                 val itemResult = downloadSingleItem(
@@ -212,7 +338,9 @@ object AudioDownloader {
                     fallbackTitle = entry.title,
                     onProgress = { percent ->
                         if (!isCancelled) {
-                            onProgress(percent)
+                            _downloadState.update {
+                                it.copy(progress = (percent / 100f).coerceIn(0f, 1f))
+                            }
                         }
                     }
                 )
@@ -223,9 +351,11 @@ object AudioDownloader {
                     sessionTrackIds.add(savedFile.nameWithoutExtension)
                     downloadedCount++
                     lastSavedFile = savedFile
-                    withContext(Dispatchers.Main) {
-                        onTrackDownloaded(savedFile)
-                        onQueueProgress(downloadedCount, entries.size)
+                    _downloadState.update {
+                        it.copy(
+                            downloadedCount = downloadedCount,
+                            libraryUpdateTick = it.libraryUpdateTick + 1
+                        )
                     }
                 }.onFailure { err ->
                     if (isCancelled || err is CancellationException) {
@@ -239,15 +369,38 @@ object AudioDownloader {
             }
 
             if (downloadedCount == 0) {
-                Result.failure(Exception("Could not download tracks"))
-            } else if (!isPlaylist && lastSavedFile != null) {
-                val sizeMb = String.format("%.2f", lastSavedFile!!.length() / (1024.0 * 1024.0))
-                Result.success("Ready! ($sizeMb MB)")
+                val msg = "Could not download tracks"
+                _downloadState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusText = "Error: $msg",
+                        progress = null,
+                        downloadedCount = 0,
+                        totalCount = 0,
+                        activeUrl = ""
+                    )
+                }
+                Result.failure(Exception(msg))
             } else {
-                val summary = if (skippedCount > 0) {
+                val summary = if (!isPlaylist && lastSavedFile != null) {
+                    val sizeMb = String.format("%.2f", lastSavedFile!!.length() / (1024.0 * 1024.0))
+                    "Ready! ($sizeMb MB)"
+                } else if (skippedCount > 0) {
                     "Added $downloadedCount tracks ($skippedCount skipped)"
                 } else {
                     "Added $downloadedCount tracks"
+                }
+
+                _downloadState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusText = summary,
+                        progress = null,
+                        downloadedCount = 0,
+                        totalCount = 0,
+                        activeUrl = "",
+                        libraryUpdateTick = it.libraryUpdateTick + 1
+                    )
                 }
                 Result.success(summary)
             }
@@ -255,8 +408,17 @@ object AudioDownloader {
             withContext(NonCancellable) {
                 val idsToRemove = sessionTrackIds.toList()
                 rollbackSessionTracks(context, idsToRemove)
-                withContext(Dispatchers.Main) {
-                    onRollback(idsToRemove)
+                _downloadState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusText = "Cancelled",
+                        progress = null,
+                        downloadedCount = 0,
+                        totalCount = 0,
+                        activeUrl = "",
+                        lastRolledBackIds = idsToRemove,
+                        libraryUpdateTick = it.libraryUpdateTick + 1
+                    )
                 }
             }
             Result.failure(Exception("Cancelled"))
@@ -265,12 +427,31 @@ object AudioDownloader {
                 withContext(NonCancellable) {
                     val idsToRemove = sessionTrackIds.toList()
                     rollbackSessionTracks(context, idsToRemove)
-                    withContext(Dispatchers.Main) {
-                        onRollback(idsToRemove)
+                    _downloadState.update {
+                        it.copy(
+                            isLoading = false,
+                            statusText = "Cancelled",
+                            progress = null,
+                            downloadedCount = 0,
+                            totalCount = 0,
+                            activeUrl = "",
+                            lastRolledBackIds = idsToRemove,
+                            libraryUpdateTick = it.libraryUpdateTick + 1
+                        )
                     }
                 }
                 Result.failure(Exception("Cancelled"))
             } else {
+                _downloadState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusText = "Error: ${e.localizedMessage}",
+                        progress = null,
+                        downloadedCount = 0,
+                        totalCount = 0,
+                        activeUrl = ""
+                    )
+                }
                 Result.failure(e)
             }
         } finally {
