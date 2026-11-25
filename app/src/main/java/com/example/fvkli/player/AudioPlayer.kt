@@ -125,6 +125,31 @@ object AudioPlayer {
         }
     }
 
+    fun updateQueueAroundCurrent(newTracks: List<Track>) {
+        val ctrl = controller ?: return
+        val curId = currentTrackId ?: return
+        val newCurrentIdx = newTracks.indexOfFirst { it.id == curId }
+        if (newCurrentIdx < 0) return
+
+        val curIdx = ctrl.currentMediaItemIndex
+        if (curIdx == C.INDEX_UNSET || curIdx !in 0 until ctrl.mediaItemCount) return
+
+        if (curIdx + 1 < ctrl.mediaItemCount) {
+            ctrl.removeMediaItems(curIdx + 1, ctrl.mediaItemCount)
+        }
+        if (curIdx > 0) {
+            ctrl.removeMediaItems(0, curIdx)
+        }
+
+        val before = newTracks.subList(0, newCurrentIdx).map { it.toMediaItem() }
+        val after = newTracks.subList(newCurrentIdx + 1, newTracks.size).map { it.toMediaItem() }
+        if (before.isNotEmpty()) {
+            ctrl.addMediaItems(0, before)
+        }
+        if (after.isNotEmpty()) {
+            ctrl.addMediaItems(ctrl.mediaItemCount, after)
+        }
+    }
     fun stopAndClear() {
         controller?.stop()
         controller?.clearMediaItems()

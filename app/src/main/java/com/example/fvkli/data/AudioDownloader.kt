@@ -1,6 +1,9 @@
 package com.example.fvkli.data
 
+import android.app.Activity
+import android.content.ClipData
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaCodec
@@ -11,6 +14,7 @@ import android.media.MediaMuxer
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.core.content.FileProvider
 import com.example.fvkli.models.Track
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
@@ -30,10 +34,6 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.util.Collections
 import java.util.UUID
-import android.app.Activity
-import android.content.ClipData
-import android.content.Intent
-import androidx.core.content.FileProvider
 
 data class DownloadState(
     val isLoading: Boolean = false,
@@ -122,10 +122,32 @@ object AudioDownloader {
         }
     }
 
-    private fun saveTrackMeta(dir: File, id: String, artist: String, title: String) {
+    private fun readMetaJson(dir: File, id: String): JSONObject {
+        val metaFile = File(dir, "$id.json")
+        if (!metaFile.exists()) return JSONObject()
+        return runCatching { JSONObject(metaFile.readText()) }.getOrElse { JSONObject() }
+    }
+
+    private fun JSONObject.optNullableString(key: String): String? {
+        if (!has(key) || isNull(key)) return null
+        return optString(key).takeIf { it.isNotBlank() }
+    }
+
+    private fun saveTrackMeta(
+        dir: File,
+        id: String,
+        artist: String,
+        title: String,
+        playlistId: String? = null,
+        sourceUrl: String? = null,
+        coverFileName: String? = null
+    ) {
         val meta = JSONObject().apply {
             put("artist", artist)
             put("title", title)
+            playlistId?.takeIf { it.isNotBlank() }?.let { put("playlistId", it) }
+            sourceUrl?.takeIf { it.isNotBlank() }?.let { put("sourceUrl", it) }
+            coverFileName?.takeIf { it.isNotBlank() }?.let { put("coverFileName", it) }
         }
         File(dir, "$id.json").writeText(meta.toString())
     }
@@ -149,8 +171,106 @@ object AudioDownloader {
         }
     }
 
-    fun updateTrackMeta(context: Context, id: String, newArtist: String, newTitle: String) {
-        saveTrackMeta(getTracksDir(context), id, newArtist.trim(), newTitle.trim())
+    private fun deleteTrackCovers(dir: File, id: String, excludeFileName: String? = null) {
+        dir.listFiles()?.forEach { file ->
+            if (file.name == excludeFileName) return@forEach
+            val isTrackImage = file.extension.lowercase() in imageExtensions &&
+                    (file.nameWithoutExtension == id || file.name.startsWith("$id."))
+            if (isTrackImage) {
+                file.delete()
+            }
+        }
+    }
+
+    private fun saveTrackCoverFromUri(context: Context, dir: File, id: String, uri: Uri): File? {
+        return runCatching {
+            val dest = File(dir, "$id.${System.currentTimeMillis()}.jpg")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            } ?: return null
+            dest
+        }.getOrNull()
+    }
+
+    fun updateTrackMeta(
+        context: Context,
+        id: String,
+        newArtist: String,
+        newTitle: String,
+        newCoverUri: Uri? = null,
+        removeCover: Boolean = false
+    ) {
+        val dir = getTracksDir(context)
+        val existing = readMetaJson(dir, id)
+        val finalCoverFileName = when {
+            removeCover -> {
+                deleteTrackCovers(dir, id)
+                null
+            }
+            newCoverUri != null -> {
+                val saved = saveTrackCoverFromUri(context, dir, id, newCoverUri)
+                if (saved != null) {
+                    deleteTrackCovers(dir, id, excludeFileName = saved.name)
+                    saved.name
+                } else {
+                    existing.optNullableString("coverFileName")
+                }
+            }
+            else -> existing.optNullableString("coverFileName")
+        }
+
+        saveTrackMeta(
+            dir = dir,
+            id = id,
+            artist = newArtist.trim(),
+            title = newTitle.trim(),
+            playlistId = existing.optNullableString("playlistId"),
+            sourceUrl = existing.optNullableString("sourceUrl"),
+            coverFileName = finalCoverFileName
+        )
+    }
+
+    fun assignTracksToPlaylist(
+        context: Context,
+        trackIds: Collection<String>,
+        playlistId: String?
+    ) {
+        if (trackIds.isEmpty()) return
+        val dir = getTracksDir(context)
+        val cleanPlaylistId = playlistId?.takeIf { it.isNotBlank() }
+
+        trackIds.forEach { id ->
+            val json = readMetaJson(dir, id)
+            if (!json.has("title")) json.put("title", id)
+            if (!json.has("artist")) json.put("artist", "Unknown")
+
+            if (cleanPlaylistId != null) {
+                json.put("playlistId", cleanPlaylistId)
+            } else {
+                json.remove("playlistId")
+            }
+            File(dir, "$id.json").writeText(json.toString())
+        }
+    }
+
+    /**
+     * Расформировывает плейлист: снимает playlistId со всех принадлежащих ему треков.
+     */
+    fun disbandPlaylistTracks(context: Context, playlistId: String) {
+        val dir = getTracksDir(context)
+        dir.listFiles()?.forEach { file ->
+            if (file.extension.equals("json", ignoreCase = true)) {
+                runCatching {
+                    val json = JSONObject(file.readText())
+                    if (json.optNullableString("playlistId") == playlistId) {
+                        json.remove("playlistId")
+                        file.writeText(json.toString())
+                    }
+                }
+            }
+        }
     }
 
     fun deleteTrack(context: Context, track: Track) {
@@ -238,6 +358,7 @@ object AudioDownloader {
         }
         context.startActivity(chooser)
     }
+
     fun getSavedTracks(context: Context): List<Track> {
         val dir = getTracksDir(context)
         val allFiles = dir.listFiles() ?: return emptyList()
@@ -248,25 +369,43 @@ object AudioDownloader {
             .map { file ->
                 val id = file.nameWithoutExtension
                 val metaFile = File(dir, "$id.json")
-                val coverFile = allFiles.firstOrNull {
-                    it.nameWithoutExtension == id && it.extension.lowercase() in imageExtensions
-                }
                 var title = id
                 var artist = "Unknown"
+                var playlistId: String? = null
+                var sourceUrl: String? = null
+                var coverFileName: String? = null
+
                 if (metaFile.exists()) {
                     runCatching {
                         val json = JSONObject(metaFile.readText())
-                        title = json.optString("title", id)
-                        artist = json.optString("artist", "Unknown")
+                        title = json.optString("title", id).ifBlank { id }
+                        artist = json.optString("artist", "Unknown").ifBlank { "Unknown" }
+                        playlistId = json.optNullableString("playlistId")
+                        sourceUrl = json.optNullableString("sourceUrl")
+                        coverFileName = json.optNullableString("coverFileName")
                     }
                 }
-                Track(id = id, title = title, artist = artist, file = file, coverFile = coverFile)
+                val coverFile = coverFileName?.let { File(dir, it) }?.takeIf { it.exists() }
+                    ?: allFiles.firstOrNull {
+                        it.nameWithoutExtension == id && it.extension.lowercase() in imageExtensions
+                    }
+
+                Track(
+                    id = id,
+                    title = title,
+                    artist = artist,
+                    file = file,
+                    coverFile = coverFile,
+                    playlistId = playlistId,
+                    sourceUrl = sourceUrl
+                )
             }
     }
 
     suspend fun downloadAudio(
         context: Context,
-        url: String
+        url: String,
+        targetPlaylistId: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         isCancelled = false
         val cleanUrl = url.trim()
@@ -305,9 +444,14 @@ object AudioDownloader {
                 return@withContext Result.failure(Exception(msg))
             }
 
+            val existingUrlKeys = getSavedTracks(context)
+                .mapNotNull { LibraryBackupManager.normalizeSourceUrl(it.sourceUrl) }
+                .toMutableSet()
+
             val isPlaylist = entries.size > 1
             var downloadedCount = 0
-            var skippedCount = 0
+            var duplicateCount = 0
+            var failedCount = 0
             var lastSavedFile: File? = null
 
             _downloadState.update {
@@ -317,6 +461,12 @@ object AudioDownloader {
             for ((index, entry) in entries.withIndex()) {
                 if (isCancelled) throw CancellationException("Cancelled")
                 currentCoroutineContext().ensureActive()
+
+                val normKey = LibraryBackupManager.normalizeSourceUrl(entry.url)
+                if (normKey != null && normKey in existingUrlKeys) {
+                    duplicateCount++
+                    continue
+                }
 
                 val statusPrefix = if (isPlaylist) {
                     "${index + 1}/${entries.size} • ${entry.title}"
@@ -336,6 +486,7 @@ object AudioDownloader {
                     context = context,
                     itemUrl = entry.url,
                     fallbackTitle = entry.title,
+                    targetPlaylistId = targetPlaylistId,
                     onProgress = { percent ->
                         if (!isCancelled) {
                             _downloadState.update {
@@ -348,6 +499,7 @@ object AudioDownloader {
                 if (isCancelled) throw CancellationException("Cancelled")
 
                 itemResult.onSuccess { savedFile ->
+                    if (normKey != null) existingUrlKeys.add(normKey)
                     sessionTrackIds.add(savedFile.nameWithoutExtension)
                     downloadedCount++
                     lastSavedFile = savedFile
@@ -364,11 +516,24 @@ object AudioDownloader {
                     if (!isPlaylist) {
                         throw err
                     }
-                    skippedCount++
+                    failedCount++
                 }
             }
 
-            if (downloadedCount == 0) {
+            if (downloadedCount == 0 && duplicateCount > 0 && failedCount == 0) {
+                val summary = if (isPlaylist) "All tracks already in library" else "Already in library"
+                _downloadState.update {
+                    it.copy(
+                        isLoading = false,
+                        statusText = summary,
+                        progress = null,
+                        downloadedCount = 0,
+                        totalCount = 0,
+                        activeUrl = ""
+                    )
+                }
+                Result.success(summary)
+            } else if (downloadedCount == 0) {
                 val msg = "Could not download tracks"
                 _downloadState.update {
                     it.copy(
@@ -385,10 +550,16 @@ object AudioDownloader {
                 val summary = if (!isPlaylist && lastSavedFile != null) {
                     val sizeMb = String.format("%.2f", lastSavedFile!!.length() / (1024.0 * 1024.0))
                     "Ready! ($sizeMb MB)"
-                } else if (skippedCount > 0) {
-                    "Added $downloadedCount tracks ($skippedCount skipped)"
                 } else {
-                    "Added $downloadedCount tracks"
+                    val extras = buildList {
+                        if (duplicateCount > 0) add("$duplicateCount already saved")
+                        if (failedCount > 0) add("$failedCount failed")
+                    }
+                    if (extras.isNotEmpty()) {
+                        "Added $downloadedCount tracks (${extras.joinToString(", ")})"
+                    } else {
+                        "Added $downloadedCount tracks"
+                    }
                 }
 
                 _downloadState.update {
@@ -459,6 +630,206 @@ object AudioDownloader {
         }
     }
 
+    suspend fun downloadImportBatch(
+        context: Context,
+        items: List<ImportTrackRequest>
+    ): Result<String> = withContext(Dispatchers.IO) {
+        if (items.isEmpty()) return@withContext Result.success("Nothing to import")
+
+        isCancelled = false
+        val sessionTrackIds = Collections.synchronizedList(mutableListOf<String>())
+        val createdPlaylistIds = Collections.synchronizedSet(mutableSetOf<String>())
+
+        _downloadState.update {
+            it.copy(
+                isLoading = true,
+                statusText = "Preparing import...",
+                progress = null,
+                currentIndex = 0,
+                downloadedCount = 0,
+                totalCount = items.size,
+                activeUrl = "JSON Backup",
+                lastRolledBackIds = emptyList()
+            )
+        }
+
+        try {
+            ensureInitialized(context) { msg ->
+                _downloadState.update { it.copy(statusText = msg) }
+            }
+            if (isCancelled) throw CancellationException("Cancelled")
+            currentCoroutineContext().ensureActive()
+
+            val existingUrlKeys = getSavedTracks(context)
+                .mapNotNull { LibraryBackupManager.normalizeSourceUrl(it.sourceUrl) }
+                .toMutableSet()
+
+            var downloadedCount = 0
+            var duplicateCount = 0
+            var failedCount = 0
+
+            for ((index, item) in items.withIndex()) {
+                if (isCancelled) throw CancellationException("Cancelled")
+                currentCoroutineContext().ensureActive()
+
+                val normKey = LibraryBackupManager.normalizeSourceUrl(item.url)
+                if (normKey != null && normKey in existingUrlKeys) {
+                    duplicateCount++
+                    continue
+                }
+
+                val displayTitle = item.title.ifBlank { "Track ${index + 1}" }
+                _downloadState.update {
+                    it.copy(
+                        currentIndex = index + 1,
+                        progress = 0f,
+                        statusText = "${index + 1}/${items.size} • $displayTitle"
+                    )
+                }
+
+                val existingPlaylistId = item.playlistName?.let { plName ->
+                    PlaylistStorage.loadPlaylists(context)
+                        .firstOrNull { it.name.equals(plName, ignoreCase = true) }
+                        ?.id
+                }
+
+                val itemResult = downloadSingleItem(
+                    context = context,
+                    itemUrl = item.url,
+                    fallbackTitle = displayTitle,
+                    targetPlaylistId = existingPlaylistId,
+                    overrideArtist = item.artist,
+                    overrideTitle = item.title,
+                    onProgress = { percent ->
+                        if (!isCancelled) {
+                            _downloadState.update {
+                                it.copy(progress = (percent / 100f).coerceIn(0f, 1f))
+                            }
+                        }
+                    }
+                )
+
+                if (isCancelled) throw CancellationException("Cancelled")
+
+                itemResult.onSuccess { savedFile ->
+                    val trackId = savedFile.nameWithoutExtension
+                    sessionTrackIds.add(trackId)
+                    if (normKey != null) existingUrlKeys.add(normKey)
+
+                    val targetName = item.playlistName
+                    if (targetName != null && existingPlaylistId == null) {
+                        val latestPlaylists = PlaylistStorage.loadPlaylists(context)
+                        val match = latestPlaylists.firstOrNull { it.name.equals(targetName, ignoreCase = true) }
+                        val resolvedId = if (match != null) {
+                            match.id
+                        } else {
+                            val (created, _) = PlaylistStorage.createPlaylist(
+                                context = context,
+                                existing = latestPlaylists,
+                                name = targetName,
+                                coverUri = null
+                            )
+                            createdPlaylistIds.add(created.id)
+                            created.id
+                        }
+                        assignTracksToPlaylist(context, listOf(trackId), resolvedId)
+                    }
+
+                    downloadedCount++
+                    _downloadState.update {
+                        it.copy(
+                            downloadedCount = downloadedCount,
+                            libraryUpdateTick = it.libraryUpdateTick + 1
+                        )
+                    }
+                }.onFailure { err ->
+                    if (isCancelled || err is CancellationException) {
+                        throw CancellationException("Cancelled")
+                    }
+                    failedCount++
+                }
+            }
+
+            val summary = when {
+                downloadedCount == 0 && duplicateCount > 0 && failedCount == 0 ->
+                    "All tracks already in library"
+                downloadedCount == 0 ->
+                    "Could not import tracks ($failedCount failed)"
+                else -> {
+                    val extras = buildList {
+                        if (duplicateCount > 0) add("$duplicateCount skipped")
+                        if (failedCount > 0) add("$failedCount failed")
+                    }
+                    if (extras.isNotEmpty()) {
+                        "Imported $downloadedCount tracks (${extras.joinToString(", ")})"
+                    } else {
+                        "Imported $downloadedCount tracks"
+                    }
+                }
+            }
+
+            _downloadState.update {
+                it.copy(
+                    isLoading = false,
+                    statusText = summary,
+                    progress = null,
+                    downloadedCount = 0,
+                    totalCount = 0,
+                    activeUrl = "",
+                    libraryUpdateTick = it.libraryUpdateTick + 1
+                )
+            }
+            if (downloadedCount == 0 && failedCount > 0) {
+                Result.failure(Exception(summary))
+            } else {
+                Result.success(summary)
+            }
+        } catch (e: Exception) {
+            withContext(NonCancellable) {
+                if (isCancelled || e is CancellationException) {
+                    val idsToRemove = sessionTrackIds.toList()
+                    rollbackSessionTracks(context, idsToRemove)
+                    cleanupEmptyCreatedPlaylists(context, createdPlaylistIds)
+                    _downloadState.update {
+                        it.copy(
+                            isLoading = false,
+                            statusText = "Import cancelled",
+                            progress = null,
+                            downloadedCount = 0,
+                            totalCount = 0,
+                            activeUrl = "",
+                            lastRolledBackIds = idsToRemove,
+                            libraryUpdateTick = it.libraryUpdateTick + 1
+                        )
+                    }
+                } else {
+                    _downloadState.update {
+                        it.copy(
+                            isLoading = false,
+                            statusText = "Error: ${e.localizedMessage}",
+                            progress = null,
+                            downloadedCount = 0,
+                            totalCount = 0,
+                            activeUrl = ""
+                        )
+                    }
+                }
+            }
+            Result.failure(e)
+        } finally {
+            currentProcessId = null
+        }
+    }
+
+    private fun cleanupEmptyCreatedPlaylists(context: Context, createdIds: Set<String>) {
+        if (createdIds.isEmpty()) return
+        val usedIds = getSavedTracks(context).mapNotNull { it.playlistId }.toSet()
+        val latest = PlaylistStorage.loadPlaylists(context)
+        val cleaned = latest.filterNot { it.id in createdIds && it.id !in usedIds }
+        if (cleaned.size != latest.size) {
+            PlaylistStorage.savePlaylists(context, cleaned)
+        }
+    }
     private fun rollbackSessionTracks(context: Context, trackIds: List<String>) {
         if (trackIds.isEmpty()) return
         val dir = getTracksDir(context)
@@ -530,6 +901,9 @@ object AudioDownloader {
         context: Context,
         itemUrl: String,
         fallbackTitle: String,
+        targetPlaylistId: String? = null,
+        overrideArtist: String? = null,
+        overrideTitle: String? = null,
         onProgress: (Float) -> Unit
     ): Result<File> {
         val trackId = System.currentTimeMillis().toString()
@@ -566,6 +940,7 @@ object AudioDownloader {
             var rawTitle = fallbackTitle
             var uploader = "Unknown"
             var thumbUrl = ""
+            var resolvedSourceUrl = itemUrl
             val infoFile = files.firstOrNull { it.name.endsWith(".info.json") }
             if (infoFile != null) {
                 runCatching {
@@ -577,6 +952,7 @@ object AudioDownloader {
                         .ifBlank { infoJson.optString("channel") }
                         .ifBlank { "Unknown" }
                     thumbUrl = infoJson.optString("thumbnail")
+                    resolvedSourceUrl = infoJson.optString("webpage_url").ifBlank { itemUrl }
                 }
             }
 
@@ -603,8 +979,17 @@ object AudioDownloader {
                 }
             }
 
-            val (artist, title) = parseArtistAndTitle(rawTitle, uploader)
-            saveTrackMeta(audioDir, trackId, artist, title)
+            val (parsedArtist, parsedTitle) = parseArtistAndTitle(rawTitle, uploader)
+            val artist = overrideArtist?.trim()?.takeIf { it.isNotBlank() } ?: parsedArtist
+            val title = overrideTitle?.trim()?.takeIf { it.isNotBlank() } ?: parsedTitle
+            saveTrackMeta(
+                dir = audioDir,
+                id = trackId,
+                artist = artist,
+                title = title,
+                playlistId = targetPlaylistId,
+                sourceUrl = resolvedSourceUrl
+            )
 
             Result.success(finalAudioFile)
         } catch (e: Exception) {
@@ -615,8 +1000,13 @@ object AudioDownloader {
         }
     }
 
-    suspend fun importLocalFile(context: Context, uri: Uri): Result<File> = withContext(Dispatchers.IO) {
+    suspend fun importLocalFile(
+        context: Context,
+        uri: Uri,
+        targetPlaylistId: String? = null
+    ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
+
             val audioDir = getTracksDir(context)
             val trackId = System.currentTimeMillis().toString()
 
@@ -638,8 +1028,15 @@ object AudioDownloader {
 
             extractEmbeddedCover(context, uri, File(audioDir, "$trackId.jpg"))
 
+
             val (artist, title) = parseArtistAndTitle(rawName, "Unknown")
-            saveTrackMeta(audioDir, trackId, artist, title)
+            saveTrackMeta(
+                dir = audioDir,
+                id = trackId,
+                artist = artist,
+                title = title,
+                playlistId = targetPlaylistId
+            )
 
             targetFile
         }

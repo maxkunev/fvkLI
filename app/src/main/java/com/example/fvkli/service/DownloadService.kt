@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import com.example.fvkli.data.ImportTrackRequest
 
 class DownloadService : Service() {
 
@@ -43,8 +44,40 @@ class DownloadService : Service() {
                 AudioDownloader.cancelDownload(this)
                 return START_NOT_STICKY
             }
+            ACTION_START_IMPORT -> {
+                val items = pendingImportItems
+                pendingImportItems = emptyList()
+                if (items.isEmpty()) {
+                    if (!AudioDownloader.downloadState.value.isLoading) stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (downloadJob?.isActive == true) {
+                    return START_NOT_STICKY
+                }
+
+                startForegroundWithNotification(
+                    AudioDownloader.downloadState.value.copy(
+                        isLoading = true,
+                        totalCount = items.size,
+                        statusText = "Preparing import..."
+                    )
+                )
+                observeDownloadState()
+
+                downloadJob = serviceScope.launch {
+                    val result = AudioDownloader.downloadImportBatch(this@DownloadService, items)
+                    observerJob?.cancel()
+                    ServiceCompat.stopForeground(this@DownloadService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+
+                    result.onSuccess { summary ->
+                        showCompletionNotification(summary)
+                    }
+                    stopSelf()
+                }
+            }
             ACTION_START -> {
                 val url = intent.getStringExtra(EXTRA_URL)?.trim().orEmpty()
+                val targetPlaylistId = intent.getStringExtra(EXTRA_PLAYLIST_ID)?.takeIf { it.isNotBlank() }
                 if (url.isBlank()) {
                     if (!AudioDownloader.downloadState.value.isLoading) stopSelf()
                     return START_NOT_STICKY
@@ -62,7 +95,7 @@ class DownloadService : Service() {
                 observeDownloadState()
 
                 downloadJob = serviceScope.launch {
-                    val result = AudioDownloader.downloadAudio(this@DownloadService, url)
+                    val result = AudioDownloader.downloadAudio(this@DownloadService, url, targetPlaylistId)
                     observerJob?.cancel()
                     ServiceCompat.stopForeground(this@DownloadService, ServiceCompat.STOP_FOREGROUND_REMOVE)
 
@@ -210,13 +243,29 @@ class DownloadService : Service() {
         const val ACTION_START = "com.example.fvkli.action.START_DOWNLOAD"
         const val ACTION_CANCEL = "com.example.fvkli.action.CANCEL_DOWNLOAD"
         const val EXTRA_URL = "extra_url"
+        const val EXTRA_PLAYLIST_ID = "extra_playlist_id"
+        const val ACTION_START_IMPORT = "com.example.fvkli.action.START_IMPORT"
 
-        fun start(context: Context, url: String) {
+        @Volatile
+        private var pendingImportItems: List<ImportTrackRequest> = emptyList()
+
+        fun startImport(context: Context, items: List<ImportTrackRequest>) {
+            if (items.isEmpty()) return
+            pendingImportItems = items
+            val intent = Intent(context, DownloadService::class.java).apply {
+                action = ACTION_START_IMPORT
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+        fun start(context: Context, url: String, targetPlaylistId: String? = null) {
             val cleanUrl = url.trim()
             if (cleanUrl.isBlank()) return
             val intent = Intent(context, DownloadService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_URL, cleanUrl)
+                targetPlaylistId?.takeIf { it.isNotBlank() }?.let {
+                    putExtra(EXTRA_PLAYLIST_ID, it)
+                }
             }
             ContextCompat.startForegroundService(context, intent)
         }

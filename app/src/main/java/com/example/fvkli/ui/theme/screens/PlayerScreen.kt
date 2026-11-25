@@ -86,6 +86,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalContext
 import coil.request.ImageRequest
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.DriveFileMove
+import androidx.compose.material.icons.rounded.PlaylistRemove
 
 @Composable
 fun PlayerScreen(
@@ -98,6 +101,8 @@ fun PlayerScreen(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onEdit: (Track) -> Unit = {},
+    onAddOrMoveToPlaylist: (Track) -> Unit = {},
+    onRemoveFromPlaylist: (Track) -> Unit = {},
     onDelete: (Track) -> Unit = {},
     onClose: () -> Unit
 ) {
@@ -337,6 +342,7 @@ fun PlayerScreen(
                 Spacer(modifier = Modifier.weight(0.55f))
 
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val sideCoverAlpha = if (p >= 0.995f && activeOffsetX != 0f) 1f else 0f
                     val cardSize = maxWidth - 56.dp
                     val gap = 34.dp
                     val stepPx = with(density) { (cardSize + gap).toPx() }
@@ -388,8 +394,10 @@ fun PlayerScreen(
                                 CoverCard(
                                     track = previousTrack,
                                     modifier = Modifier
+                                        .graphicsLayer { alpha = sideCoverAlpha }
                                         .size(cardSize)
-                                        .offset { IntOffset((-stepPx + activeOffsetX).roundToInt(), 0) }
+                                        .offset { IntOffset((-stepPx + activeOffsetX).roundToInt(), 0)
+                                        }
                                 )
                             }
                         }
@@ -404,8 +412,10 @@ fun PlayerScreen(
                         if (nextTrack != null) {
                             key("next_${nextTrack.id}") {
                                 CoverCard(
+
                                     track = nextTrack,
                                     modifier = Modifier
+                                        .graphicsLayer { alpha = sideCoverAlpha }
                                         .size(cardSize)
                                         .offset { IntOffset((stepPx + activeOffsetX).roundToInt(), 0) }
                                 )
@@ -544,6 +554,7 @@ fun PlayerScreen(
                             onClick = { showMoreMenu = false }
                         )
                 ) {
+                    val inPlaylist = activeTrack.playlistId != null
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = Color(0xFF252525),
@@ -552,9 +563,55 @@ fun PlayerScreen(
                             .align(Alignment.TopEnd)
                             .systemBarsPadding()
                             .padding(top = 52.dp, end = 16.dp)
-                            .width(150.dp)
+                            .width(210.dp)
                     ) {
                         Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showMoreMenu = false
+                                        onAddOrMoveToPlaylist(activeTrack)
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = if (inPlaylist) "Move to playlist" else "Add to playlist",
+                                    color = Color.White,
+                                    fontSize = 15.sp
+                                )
+                                Icon(
+                                    imageVector = if (inPlaylist) Icons.Rounded.DriveFileMove else Icons.AutoMirrored.Rounded.PlaylistAdd,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+                            if (inPlaylist) {
+                                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showMoreMenu = false
+                                            onRemoveFromPlaylist(activeTrack)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 13.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Remove from playlist", color = Color.White, fontSize = 15.sp)
+                                    Icon(
+                                        imageVector = Icons.Rounded.PlaylistRemove,
+                                        contentDescription = "Remove from playlist",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(19.dp)
+                                    )
+                                }
+                            }
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()

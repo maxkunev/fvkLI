@@ -70,6 +70,18 @@ import com.example.fvkli.models.Track
 import com.example.fvkli.ui.theme.components.DarkDialog
 import java.io.File
 import java.util.Locale
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Upload
+import com.example.fvkli.data.AudioDownloader
+import com.example.fvkli.data.ExportPreview
+import com.example.fvkli.data.ImportPreview
+import com.example.fvkli.data.LibraryBackupManager
+import com.example.fvkli.models.Playlist
+import com.example.fvkli.service.DownloadService
+import com.example.fvkli.ui.theme.components.ExportLibraryDialog
+import com.example.fvkli.ui.theme.components.ImportLibraryDialog
 
 private enum class LegalDoc(val title: String, val body: String) {
     PRIVACY(
@@ -100,13 +112,53 @@ private enum class LegalDoc(val title: String, val body: String) {
 fun SettingsScreen(
     visible: Boolean,
     tracks: List<Track>,
+    playlists: List<Playlist>,
+    onImportStarted: () -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
 
     var activeLegalDoc by remember { mutableStateOf<LegalDoc?>(null) }
+    var exportPreview by remember { mutableStateOf<ExportPreview?>(null) }
+    var importPreview by remember { mutableStateOf<ImportPreview?>(null) }
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+
+    val exportFileSaver = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        val json = pendingExportJson
+        pendingExportJson = null
+        if (uri == null || json == null) return@rememberLauncherForActivityResult
+
+        val ok = LibraryBackupManager.writeBackupToUri(context, uri, json)
+        Toast.makeText(
+            context,
+            if (ok) "Backup saved" else "Failed to save backup",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
     var cacheBytes by remember { mutableLongStateOf(0L) }
+
+    val importFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        LibraryBackupManager.parseImportJson(
+            context = context,
+            uri = uri,
+            existingPlaylists = playlists,
+            existingTracks = tracks
+        ).onSuccess { parsed ->
+            importPreview = parsed
+        }.onFailure { err ->
+            Toast.makeText(
+                context,
+                err.message ?: "Invalid backup file",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     val libraryBytes = remember(tracks) {
         tracks.sumOf { track ->
@@ -121,6 +173,8 @@ fun SettingsScreen(
             cacheBytes = calculateDirSize(context.cacheDir)
         } else {
             activeLegalDoc = null
+            exportPreview = null
+            importPreview = null
         }
     }
 
@@ -137,7 +191,10 @@ fun SettingsScreen(
             animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
         ) + fadeOut(animationSpec = tween(durationMillis = 180))
     ) {
-        BackHandler(enabled = activeLegalDoc == null, onBack = onClose)
+        BackHandler(
+            enabled = activeLegalDoc == null && exportPreview == null && importPreview == null,
+            onBack = onClose
+        )
 
         Column(
             modifier = Modifier
@@ -185,7 +242,7 @@ fun SettingsScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                // Секция Storage
+
                 SettingsSectionTitle("Storage")
                 SettingsCard {
                     SettingsRow(
@@ -213,7 +270,34 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Секция Legal
+
+                SettingsSectionTitle("Backup")
+                SettingsCard {
+                    SettingsRow(
+                        icon = Icons.Rounded.Upload,
+                        title = "Export library (JSON)",
+                        subtitle = "Save or share playlists and track links",
+                        onClick = {
+                            exportPreview = LibraryBackupManager.buildExportPreview(playlists, tracks)
+                        }
+                    )
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                    SettingsRow(
+                        icon = Icons.Rounded.Download,
+                        title = "Import library (JSON)",
+                        subtitle = "Restore playlists and tracks from a file",
+                        onClick = {
+                            if (AudioDownloader.downloadState.value.isLoading) {
+                                Toast.makeText(context, "Wait for current download to finish", Toast.LENGTH_SHORT).show()
+                            } else {
+                                importFilePicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                            }
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
                 SettingsSectionTitle("Legal")
                 SettingsCard {
                     SettingsRow(
@@ -313,6 +397,58 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+    exportPreview?.let { preview ->
+        ExportLibraryDialog(
+            preview = preview,
+            onDismiss = { exportPreview = null },
+            onSaveToFile = { selectedPlaylists, includeStandalone ->
+                val json = LibraryBackupManager.buildBackupJson(
+                    selectedPlaylists = selectedPlaylists,
+                    includeStandalone = includeStandalone,
+                    standaloneTracks = preview.standaloneExportable
+                )
+                exportPreview = null
+                pendingExportJson = json
+                exportFileSaver.launch(LibraryBackupManager.defaultBackupFileName())
+            },
+            onShare = { selectedPlaylists, includeStandalone ->
+                val json = LibraryBackupManager.buildBackupJson(
+                    selectedPlaylists = selectedPlaylists,
+                    includeStandalone = includeStandalone,
+                    standaloneTracks = preview.standaloneExportable
+                )
+                exportPreview = null
+                val ok = LibraryBackupManager.shareBackupJson(context, json)
+                if (!ok) {
+                    Toast.makeText(context, "Failed to share backup", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    importPreview?.let { preview ->
+        ImportLibraryDialog(
+            preview = preview,
+            onDismiss = { importPreview = null },
+            onConfirm = { selectedPlaylistNames, includeStandalone ->
+                if (AudioDownloader.downloadState.value.isLoading) {
+                    Toast.makeText(context, "A download is already in progress", Toast.LENGTH_SHORT).show()
+                    return@ImportLibraryDialog
+                }
+                val queue = LibraryBackupManager.buildImportQueue(
+                    preview = preview,
+                    selectedPlaylistNames = selectedPlaylistNames,
+                    includeStandalone = includeStandalone
+                )
+                importPreview = null
+                if (queue.isNotEmpty()) {
+                    DownloadService.startImport(context, queue)
+                    onImportStarted()
+                    Toast.makeText(context, "Importing ${queue.size} tracks...", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
     }
 }
 

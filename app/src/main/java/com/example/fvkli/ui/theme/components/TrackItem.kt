@@ -43,6 +43,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.fvkli.models.Track
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.rounded.Check
 
 data class TrackAnchor(
     val x: Float = 0f,
@@ -59,6 +68,7 @@ fun TrackItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isGrid: Boolean = false,
+    isSelected: Boolean = false,
     onLongClick: ((TrackAnchor) -> Unit)? = null,
     isElevated: Boolean = false
 ) {
@@ -71,7 +81,12 @@ fun TrackItem(
         isGrid -> Color(0xFF181818)
         else -> Color.Transparent
     }
-
+    val badgeBorderColor = when {
+        isElevated -> Color(0xFF2A2A2A)
+        isCurrent -> Color(0xFF1E1E1E)
+        isGrid -> Color(0xFF181818)
+        else -> Color(0xFF121212)
+    }
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = bgColor,
@@ -108,44 +123,59 @@ fun TrackItem(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(1f)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF242424)),
-                    contentAlignment = Alignment.Center
                 ) {
-                    if (track.coverFile != null) {
-                        AsyncImage(
-                            model = track.coverFile,
-                            contentDescription = "Cover",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Rounded.MusicNote,
-                            contentDescription = null,
-                            tint = Color.Gray,
-                            modifier = Modifier.size(44.dp)
-                        )
-                    }
-
-                    if (isCurrent) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(8.dp)
-                                .size(30.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.72f)),
-                            contentAlignment = Alignment.Center
-                        ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF242424)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (track.coverFile != null) {
+                            AsyncImage(
+                                model = track.coverFile,
+                                contentDescription = "Cover",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
                             Icon(
-                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                imageVector = Icons.Rounded.MusicNote,
                                 contentDescription = null,
-                                tint = Color(0xFF1DB954),
-                                modifier = Modifier.size(18.dp)
+                                tint = Color.Gray,
+                                modifier = Modifier.size(44.dp)
                             )
                         }
+
+                        if (isCurrent && !isSelected) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                                    .size(30.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.72f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color(0xFF1DB954),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                     }
+
+                    SelectionCheckBadge(
+                        visible = isSelected,
+                        borderColor = badgeBorderColor,
+                        sizeDp = 26,
+                        iconSizeDp = 16,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .offset(x = 4.dp, y = 4.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -185,23 +215,35 @@ fun TrackItem(
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF242424)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (track.coverFile != null) {
-                        AsyncImage(
-                            model = track.coverFile,
-                            contentDescription = "Cover",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = Color.Gray)
+                Box(modifier = Modifier.size(46.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF242424)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (track.coverFile != null) {
+                            AsyncImage(
+                                model = track.coverFile,
+                                contentDescription = "Cover",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = Color.Gray)
+                        }
                     }
+
+                    SelectionCheckBadge(
+                        visible = isSelected,
+                        borderColor = badgeBorderColor,
+                        sizeDp = 21,
+                        iconSizeDp = 13,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .offset(x = 4.dp, y = 4.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -224,6 +266,38 @@ fun TrackItem(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SelectionCheckBadge(
+    visible: Boolean,
+    borderColor: Color,
+    sizeDp: Int,
+    iconSizeDp: Int,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = scaleIn(tween(150), initialScale = 0.5f) + fadeIn(tween(150)),
+        exit = scaleOut(tween(120), targetScale = 0.5f) + fadeOut(tween(120)),
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .size(sizeDp.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF1DB954))
+                .border(2.dp, borderColor, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = "Selected",
+                tint = Color.White,
+                modifier = Modifier.size(iconSizeDp.dp)
+            )
         }
     }
 }

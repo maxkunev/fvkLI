@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlin.math.roundToInt
-
+import com.example.fvkli.models.Playlist
 @Composable
 fun AddLinkDialog(
     url: String,
@@ -70,7 +70,10 @@ fun AddLinkDialog(
     onDismiss: () -> Unit,
     onMinimize: () -> Unit = {},
     onCancelClick: () -> Unit,
-    onDownloadClick: () -> Unit
+    onDownloadClick: () -> Unit,
+    playlists: List<Playlist> = emptyList(),
+    selectedPlaylistId: String? = null,
+    onSelectPlaylistId: (String?) -> Unit = {},
 ) {
     val clipboardManager = LocalClipboardManager.current
     val dialogBgColor = Color(0xFF1E1E1E)
@@ -192,6 +195,15 @@ fun AddLinkDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    if (playlists.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        PlaylistDestinationSelector(
+                            playlists = playlists,
+                            selectedPlaylistId = selectedPlaylistId,
+                            enabled = !isLoading,
+                            onSelect = onSelectPlaylistId
+                        )
+                    }
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Row(

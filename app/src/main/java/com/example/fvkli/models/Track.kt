@@ -7,5 +7,7 @@ data class Track(
     val title: String,
     val artist: String,
     val file: File,
-    val coverFile: File? = null
+    val coverFile: File? = null,
+    val playlistId: String? = null,
+    val sourceUrl: String? = null
 )
