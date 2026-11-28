@@ -123,9 +123,17 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.Path
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 data class PlaylistAnchor(
     val x: Float = 0f,
     val y: Float = 0f,
+    val widthPx: Int = 0
+)
+
+data class PlaylistShelfAnchor(
+    val leftPx: Float = 0f,
+    val topPx: Float = 0f,
     val widthPx: Int = 0
 )
 
@@ -419,14 +427,19 @@ fun PlaylistShelf(
     isPlaying: Boolean = false,
     onPlaylistClick: (Playlist) -> Unit,
     onPlaylistLongClick: (Playlist, PlaylistAnchor) -> Unit,
-    onExpandGrid: () -> Unit,
+    onExpandGrid: (PlaylistShelfAnchor) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (playlists.isEmpty()) return
 
+    val density = LocalDensity.current
     val pageCount = ((playlists.size + 2) / 3).coerceAtLeast(1)
     val pagerState = rememberPagerState(pageCount = { pageCount })
     val hasOverflow = playlists.size > 3
+
+    val shelfHorizontalInset = 6.dp
+    val insetPx = with(density) { shelfHorizontalInset.toPx() }
+    var shelfAnchor by remember { mutableStateOf(PlaylistShelfAnchor()) }
 
     Column(
         modifier = modifier
@@ -436,7 +449,17 @@ fun PlaylistShelf(
     ) {
         HorizontalPager(
             state = pagerState,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { coords ->
+                    val pos = coords.positionInRoot()
+                    shelfAnchor = PlaylistShelfAnchor(
+                        leftPx = pos.x + insetPx,
+                        topPx = pos.y,
+                        widthPx = (coords.size.width - insetPx * 2f).roundToInt().coerceAtLeast(0)
+                    )
+                },
+            contentPadding = PaddingValues(horizontal = shelfHorizontalInset),
             pageSpacing = 12.dp
         ) { page ->
             val startIndex = page * 3
@@ -477,9 +500,9 @@ fun PlaylistShelf(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(26.dp)
-                    .padding(horizontal = 4.dp)
+                    .padding(horizontal = shelfHorizontalInset)
             ) {
-                // Точки пагинации строго по центру
+
                 Row(
                     modifier = Modifier.align(Alignment.Center),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -500,7 +523,7 @@ fun PlaylistShelf(
 
 
                 Surface(
-                    onClick = onExpandGrid,
+                    onClick = { onExpandGrid(shelfAnchor) },
                     shape = RoundedCornerShape(10.dp),
                     color = Color(0xFF222222),
                     modifier = Modifier.align(Alignment.CenterEnd)
@@ -509,7 +532,7 @@ fun PlaylistShelf(
                         modifier = Modifier
                             .width(34.dp)
                             .height(22.dp),
-                        contentAlignment = Alignment.Center
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.KeyboardArrowDown,
@@ -540,6 +563,7 @@ fun PlaylistExpandedGridOverlay(
     selectedPlaylistIds: Set<String>,
     playingPlaylistId: String? = null,
     isPlaying: Boolean = false,
+    anchor: PlaylistShelfAnchor = PlaylistShelfAnchor(),
     onDismiss: () -> Unit,
     onPlaylistClick: (Playlist) -> Unit,
     onPlaylistLongClick: (Playlist, PlaylistAnchor) -> Unit,
@@ -559,6 +583,10 @@ fun PlaylistExpandedGridOverlay(
         val dragSlopPx = with(density) { 10.dp.toPx() }
         val hysteresisPx = with(density) { 10.dp.toPx() }
         val hGap = 12.dp
+        val cardHeaderHeight = 44.dp
+        val cardHeaderHeightPx = with(density) { cardHeaderHeight.toPx() }
+        val statusBarTopPx = WindowInsets.statusBars.getTop(density).toFloat()
+        val minTopPx = statusBarTopPx + with(density) { 4.dp.toPx() }
         val vGap = 14.dp
 
         val scrollState = rememberScrollState()
@@ -582,7 +610,25 @@ fun PlaylistExpandedGridOverlay(
         val latestOnLongClick by rememberUpdatedState(onPlaylistLongClick)
         val latestOnCancelMenu by rememberUpdatedState(onCancelContextMenu)
         val latestOnReorder by rememberUpdatedState(onReorderPlaylists)
+        val desiredTilesTopPx = if (anchor.topPx > 0f) {
+            anchor.topPx - overlayRootOffset.y
+        } else {
+            statusBarTopPx + with(density) { 56.dp.toPx() }
+        }
+        val cardTopDp = with(density) {
+            (desiredTilesTopPx - cardHeaderHeightPx).coerceAtLeast(minTopPx).toDp()
+        }
 
+        val tileSideInsetPx = if (anchor.widthPx > 0) {
+            (anchor.leftPx - overlayRootOffset.x).coerceAtLeast(0f)
+        } else {
+            with(density) { 20.dp.toPx() }
+        }
+        val outerSidePx = (tileSideInsetPx - with(density) { 10.dp.toPx() })
+            .coerceAtLeast(with(density) { 4.dp.toPx() })
+        val innerSidePx = (tileSideInsetPx - outerSidePx).coerceAtLeast(0f)
+        val outerSideDp = with(density) { outerSidePx.toDp() }
+        val innerSideDp = with(density) { innerSidePx.toDp() }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -599,8 +645,7 @@ fun PlaylistExpandedGridOverlay(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(top = 56.dp, start = 12.dp, end = 12.dp)
+                    .padding(top = cardTopDp, start = outerSideDp, end = outerSideDp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -617,22 +662,28 @@ fun PlaylistExpandedGridOverlay(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 12.dp, bottom = 12.dp),
+                            .padding(bottom = 12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            text = "Playlists (${workingPlaylists.size})",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(bottom = 12.dp)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(cardHeaderHeight),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Playlists",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
 
                         BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = maxGridHeight)
-                                .padding(horizontal = 12.dp, vertical = 2.dp)
+                                .padding(horizontal = innerSideDp)
                                 .verticalScroll(scrollState, enabled = pressedId == null)
                         ) {
                             val tileWidth = (maxWidth - hGap * 2) / 3f
@@ -860,14 +911,7 @@ fun PlaylistExpandedGridOverlay(
                         }
                     }
                 }
-                PlaylistCollapseTab(
-                    color = Color(0xFF1A1A1A),
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .align(Alignment.End)
-                        .padding(end = 24.dp)
-                        .offset(y = (-1).dp)
-                )
+
             }
 
             if (isDragging && pressedId != null) {
@@ -1498,62 +1542,3 @@ fun PlaylistDestinationSelector(
     }
 }
 
-@Composable
-private fun PlaylistCollapseTab(
-    color: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .width(56.dp)
-            .height(26.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            val flare = 8.dp.toPx()
-            val bottomRadius = 10.dp.toPx()
-
-            val path = Path().apply {
-                moveTo(0f, 0f)
-                cubicTo(
-                    flare * 0.65f, 0f,
-                    flare, flare * 0.35f,
-                    flare + 2.dp.toPx(), h - bottomRadius
-                )
-                quadraticTo(
-                    flare + 3.dp.toPx(), h,
-                    flare + 3.dp.toPx() + bottomRadius, h
-                )
-                lineTo(w - flare - 3.dp.toPx() - bottomRadius, h)
-                quadraticTo(
-                    w - flare - 3.dp.toPx(), h,
-                    w - flare - 2.dp.toPx(), h - bottomRadius
-                )
-                cubicTo(
-                    w - flare, flare * 0.35f,
-                    w - flare * 0.65f, 0f,
-                    w, 0f
-                )
-                close()
-            }
-            drawPath(path = path, color = color)
-        }
-
-        Icon(
-            imageVector = Icons.Rounded.KeyboardArrowUp,
-            contentDescription = "Collapse playlists",
-            tint = Color(0xFFB3B3B3),
-            modifier = Modifier
-                .padding(bottom = 2.dp)
-                .size(22.dp)
-        )
-    }
-}

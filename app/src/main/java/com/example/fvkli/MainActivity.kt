@@ -123,6 +123,7 @@ import com.example.fvkli.ui.theme.components.PlaylistShelf
 import com.example.fvkli.ui.theme.components.DarkDialog
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import android.net.Uri
+import com.example.fvkli.ui.theme.components.PlaylistShelfAnchor
 class MainActivity : ComponentActivity() {
     private var sharedUrlEvent by mutableStateOf<Pair<String, Long>?>(null)
 
@@ -200,6 +201,7 @@ fun SimpleWindowScreen(
     var showSettingsScreen by remember { mutableStateOf(false) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var showExpandedPlaylists by remember { mutableStateOf(false) }
+    var expandedPlaylistsAnchor by remember { mutableStateOf(PlaylistShelfAnchor()) }
     var contextMenuPlaylist by remember { mutableStateOf<Playlist?>(null) }
     var playlistMenuAnchor by remember { mutableStateOf(PlaylistAnchor()) }
     var trackIdsPendingPlaylist by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -835,8 +837,9 @@ fun SimpleWindowScreen(
                                         contextMenuPlaylist = playlist
                                     }
                                 },
-                                onExpandGrid = {
+                                onExpandGrid = { anchor ->
                                     if (!isTrackSelectionMode) {
+                                        expandedPlaylistsAnchor = anchor
                                         showExpandedPlaylists = true
                                     }
                                 }
@@ -965,6 +968,7 @@ fun SimpleWindowScreen(
             playingPlaylistId = currentTrack?.playlistId,
             isPlaying = AudioPlayer.isPlaying,
             tracksByPlaylist = tracksByPlaylist,
+            anchor = expandedPlaylistsAnchor,
             isPlaylistSelectionMode = isPlaylistSelectionMode,
             selectedPlaylistIds = selectedPlaylistIds,
             onDismiss = { showExpandedPlaylists = false },
